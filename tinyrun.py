@@ -26,7 +26,7 @@ class Frame():
                 self.f_builtin_names = self.f_builtin_names.__dict__
 
         self.f_last_instruction = 0
-
+        
 
 class AFunction():
    
@@ -73,14 +73,22 @@ class TinyRun_VM():
         self.stack = [] 
       
         self.byte_method_dict = {101: self.load_name,124: self.load_fast,125: self.store_fast,90: self.store_name,100: self.load_const, #translate between opcode names and actual procedures to execute them
-                                23: self.binary_add,83 : self.return_value, 132: self.make_function,131: self.call_function,1: self.pop_top} 
+                                23: self.binary_add,83 : self.return_value, 132: self.make_function,131: self.call_function,1: self.pop_top,116: self.load_global,
+                                24: self.binary_sub,107: self.compare_op,114: self.pop_jump_if_false,115: self.pop_jump_if_true} 
+
+        #### build some comparison operators
+        self.comp_ops = [lambda x,y: x < y, lambda x,y: x<=y, lambda x,y: x == y,lambda x, y: x !=y,lambda x, y: x > y,lambda x, y: x >=y, 
+                    lambda x, y: x in y, lambda x, y: x not in y, lambda x, y: x is y,lambda x, y: x is not y, 
+                    lambda x, y: issubclass(x, Exception) and issubclass(x, y)]
+
 
     ############ next are some functions to make access to the data stack of the current frame easy
     def top(self):
         return self.cur_frame.f_data_stack[-1]
 
     def pop(self):
-        return self.cur_frame.f_data_stack.pop()
+        value = self.cur_frame.f_data_stack.pop()
+        return value
 
     def push(self, *vals):
         self.cur_frame.f_data_stack.extend(vals)
@@ -106,6 +114,7 @@ class TinyRun_VM():
         value = self.pop()
         self.cur_frame.f_local_names[name] = value
 
+
     def store_name(self,name):
         value = self.pop()
         self.cur_frame.f_local_names[name] = value
@@ -119,14 +128,25 @@ class TinyRun_VM():
             value = self.cur_frame.f_builtin_names[name]
         else:
             raise UnboundLocalError("local variable '%s' referenced before assignment" % name)
+
         self.push(value)
 
+    def load_global(self,name):
+        if name in self.cur_frame.f_global_names:
+            value = self.cur_frame.f_global_names[name]
+        elif name in self.cur_frame.f_builtin_names:
+            value = self.cur_frame.f_builtin_names[name]
+        else:
+            raise UnboundLocalError("global variable '%s' referenced before assignment" % name)
+
+        self.push(value)        
+
     def load_fast(self,name):
-        
         if name in self.cur_frame.f_local_names:
             value = self.cur_frame.f_local_names[name]
         else:
             raise UnboundLocalError("local variable '%s' referenced before assignment" % name)
+
         self.push(value)
 
     def load_const(self, value):
@@ -143,6 +163,34 @@ class TinyRun_VM():
         total = first_num + second_num
         self.push(total)
 
+    def binary_sub(self):
+        
+        first_num = self.pop()
+        second_num = self.pop()
+        total = second_num - first_num
+        self.push(total)
+
+    def compare_op(self,opnum):
+        a = self.pop()
+        b = self.pop()
+        self.push(self.comp_ops[opnum](a,b))
+
+    def pop_jump_if_true(self, jump):
+        val = self.pop()
+        if val:
+            self.jump(jump)
+
+    def pop_jump_if_false(self, jump):
+        val = self.pop()
+        if not val:
+            self.jump(jump)
+
+
+
+    def jump(self,jump):
+        self.cur_frame.f_last_instruction = jump
+
+
     def make_function(self, argc):
         name = self.pop()
         code = self.pop()
@@ -156,7 +204,6 @@ class TinyRun_VM():
         posargs = self.popn(lenPos)
 
         func = self.pop()
-        
         retval = func(*posargs)
         self.push(retval)
 
@@ -167,7 +214,7 @@ class TinyRun_VM():
         op_offset = f.f_last_instruction
         bytecode = list(f.f_code_obj.co_code)[op_offset]
         f.f_last_instruction += 2 # new in python ver >= 3.6, 16 bit wordcode
-        
+                
         if bytecode >= dis.HAVE_ARGUMENT:
             argument = []
             
@@ -191,17 +238,18 @@ class TinyRun_VM():
 
     def make_new_frame(self,code,callargs = {},gl_names = None,loc_names = None):
         if gl_names is not None and loc_names is not None:
-            loc_names = gl_names # global names are avialable inside a function, simplify lookup
+            loc_names = dict(gl_names) # global names are avialable inside a function, simplify lookup
         elif self.frames: # if there already is a frame on the callstack, inherit global namespace
             gl_names = self.cur_frame.global_names
             loc_names = {}
         else: # fresh start
-            gl_names = loc_names = {
+            loc_names = {
                 '__builtins__': __builtins__,
                 '__name__': '__main__',
                 '__doc__': None,
                 '__package__': None,
             }
+            gl_names =loc_names
         loc_names.update(callargs)
         return Frame(code, gl_names,loc_names,self.cur_frame)
     
@@ -219,9 +267,10 @@ class TinyRun_VM():
         try:
             bytecode_fn = None
             if bytecode in self.byte_method_dict:
+             
                 bytecode_fn = self.byte_method_dict[bytecode]
                 state = bytecode_fn(*argument)
-            
+
             else:
                 raise ValueError("unsupported bytecode type: %d" % bytecode)
                     
@@ -273,15 +322,6 @@ class TinyRun_VM():
 
 
 
-
-prog1 = 'def blah(t):\n\tx = t\n\ty = 3\n\tz = x + y\n\treturn z\na=blah(9)\nprint(a)\n\n'
-code1 = compile(prog1,"","exec")
-
-main_mod = imp.new_module('__main__')
-    
-tr = TinyRun_VM()
-
-value  = tr.exec_code(code1,main_mod.__dict__)
 
 
 
